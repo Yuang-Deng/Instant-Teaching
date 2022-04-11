@@ -83,13 +83,18 @@ def train_detector(model,
             model.cuda(cfg.gpu_ids[0]), device_ids=cfg.gpu_ids)
 
     # build runner
+    shepherd_model = model.module.shepherd
+    model.module.shepherd = None
     optimizer = build_optimizer(model, cfg.optimizer)
+    shepherd_optimizer = build_optimizer(shepherd_model, cfg.optimizer)
+    model.module.shepherd = shepherd_model
     runner = EpochBasedRunner(
         model,
         optimizer=optimizer,
         work_dir=cfg.work_dir,
         logger=logger,
         meta=meta)
+    runner.shepherd_optimizer = shepherd_optimizer
     # an ugly workaround to make .log and .log.json filenames the same
     runner.timestamp = timestamp
 

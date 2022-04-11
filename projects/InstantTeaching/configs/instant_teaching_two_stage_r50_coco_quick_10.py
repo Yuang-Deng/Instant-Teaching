@@ -1,7 +1,7 @@
 num_classes = 80
 
 # dataset settings
-data_root = 'datasets/coco/coco_2017/'
+data_root = '/data/dya/dataset/coco/'
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
 
@@ -88,6 +88,33 @@ train_pipeline_strong_aug = [
     dict(type='DefaultFormatBundleV2'),
     dict(type='CollectList', keys=['img', 'gt_bboxes', 'gt_labels', 'gt_scores']),
 ]
+train_pipeline_shepherd = [
+    dict(type='LoadImageFromFileV2'),
+    dict(type='LoadAnnotationsV2', with_bbox=True),
+    dict(type='Resize', img_scale=[(1024, 800), (1024, 500)],
+        multiscale_mode='range',
+        keep_ratio=True),
+    dict(type='RandomFlip', flip_ratio=0.5),
+    dict(type='Pad', size_divisor=32),
+    dict(
+        type='Albu',
+        transforms=albu_train_transforms,
+        bbox_params=dict(
+            type='BboxParams',
+            format='pascal_voc',
+            label_fields=['gt_labels', 'gt_scores'],
+            min_visibility=0.0,
+            filter_lost_elements=True),
+        keymap={
+            'img': 'image',
+            'gt_bboxes': 'bboxes',
+        },
+        update_pad_shape=False,
+        skip_img_without_anno=True),
+    dict(type='Normalize', **img_norm_cfg),
+    dict(type='DefaultFormatBundleV2'),
+    dict(type='CollectList', keys=['img', 'gt_bboxes', 'gt_labels', 'gt_scores']),
+]
 test_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(
@@ -133,11 +160,25 @@ model = dict(
     type='InstantTeachingTwoStageDetector',
     ssl_warmup_iters=-1,
     ssl_gt_box_low_thr=0.9,
-    ssl_with_mixup=True, ssl_with_mosaic=True,
+    ssl_with_mixup=False, ssl_with_mosaic=False,
     ssl_with_co_rectify=True,
     ssl_lambda_u=1.0,
 
     pretrained='torchvision://resnet50',
+    shepherd=dict(
+        batch_size=32,
+        backbone=dict(
+            type='ResNet',
+            depth=18,
+            num_stages=4,
+            out_indices=(3,),
+            frozen_stages=1,
+            style='pytorch'),
+        cls_head=dict(
+            in_channels=256,
+            fc_out_channels=1024,
+        )
+    ),
     backbone=dict(
         type='ResNet',
         depth=50,
@@ -218,7 +259,7 @@ train_cfg = dict(
     rcnn=dict(
         assigner=dict(
             type='MaxIoUAssignerV2',
-            use_soft_label=True,
+            use_soft_label=False,
             num_classes=num_classes,
             pos_iou_thr=0.5,
             neg_iou_thr=0.5,
@@ -250,7 +291,7 @@ test_cfg = dict(
 
 # optimizer
 optimizer = dict(type='SGD', lr=0.01, momentum=0.9, weight_decay=0.0001)
-optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
+optimizer_config = dict(type='ShepherdOptimizerHook', grad_clip=dict(max_norm=35, norm_type=2))
 # learning policy
 lr_config = dict(
     policy='step',
@@ -260,6 +301,8 @@ lr_config = dict(
     step=[80, 110])
 total_epochs = 120
 checkpoint_config = dict(interval=1)
+
+custom_hooks = [dict(type='NumClassCheckHook'), dict(type='SetDataSetHook')]
 
 # yapf:disable
 log_config = dict(

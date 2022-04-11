@@ -9,6 +9,8 @@ from copy import deepcopy
 from mmdet.core import bbox2result, bbox2roi, build_assigner, build_sampler, bbox_overlaps, multiclass_nms
 from mmdet.models.builder import DETECTORS, build_backbone, build_head, build_neck
 from mmdet.models.detectors.base import BaseDetector
+from .shepherd import ShepherdNet
+from projects.InstantTeaching.models.detectors import shepherd
 
 
 @DETECTORS.register_module()
@@ -21,6 +23,7 @@ class InstantTeachingTwoStageDetector(BaseDetector):
                  train_cfg=None,
                  test_cfg=None,
                  pretrained=None,
+                 shepherd=None,
                  ssl_warmup_iters=-1,
                  ssl_gt_box_low_thr=-1,                                
                  ssl_with_mixup=False, ssl_with_mosaic=False,
@@ -65,6 +68,10 @@ class InstantTeachingTwoStageDetector(BaseDetector):
             self.roi_head = build_head(roi_head)
             if self.ssl_with_co_rectify:
                 self.roi_head2 = build_head(roi_head)
+        
+        if shepherd is not None:
+            self.shepherd = ShepherdNet(shepherd)
+            self.shepherd_batch = shepherd.batch_size
 
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
@@ -74,7 +81,7 @@ class InstantTeachingTwoStageDetector(BaseDetector):
         losses = self(**data)
         loss, log_vars = self._parse_losses(losses)
         outputs = dict(
-            loss=loss, log_vars=log_vars, num_samples=len(data['img_metas']))
+            loss=loss, log_vars=log_vars, shepherd_loss=losses['shepherd_lsso'], num_samples=len(data['img_metas']))
         self.iter += 1
         return outputs
 
@@ -220,6 +227,7 @@ class InstantTeachingTwoStageDetector(BaseDetector):
                                                 roi_head, rcnn_test_cfg, rescale=True)
                 
                 ## convert offline pseudo labels to originla image size
+                # TODO
                 _gt_bbox = gt_bboxes_w[i]
                 if img_metas_w[i]['flip']:
                     _h, _w, _ = img_metas_w[i]['img_shape']
@@ -401,6 +409,7 @@ class InstantTeachingTwoStageDetector(BaseDetector):
                       gt_masks=None,
                       proposals=None,
                       **kwargs):
+        ori_bboxes = kwargs.pop('ori_bboxes')
         assert proposals is None and gt_masks is None
         assert gt_scores is not None
         num_classes = self.roi_head.bbox_head.num_classes
@@ -530,6 +539,7 @@ class InstantTeachingTwoStageDetector(BaseDetector):
         num_mixup_2 = 0
         num_mosaic_2 = 0
 
+        # TODO mosaic and mixup
         if self.ssl_with_mixup or self.ssl_with_mosaic or self.ssl_with_mixup_labeled or self.ssl_with_mosaic_labeled:
             assert self.train_cfg['rcnn']['assigner']['use_soft_label'] == True
 
@@ -621,12 +631,49 @@ class InstantTeachingTwoStageDetector(BaseDetector):
                     proposal_cfg=proposal_cfg)                                  # [(2000, 5), ...] in batch length
                 for key in rpn_losses_s:
                     losses.update({key+'_s': rpn_losses_s[key]})
-                
             
-            roi_losses_s = self.roi_head.forward_train(x_s, img_metas_s, proposal_list_s,
+            roi_losses_s, sampling_res = self.roi_head.forward_train(x_s, img_metas_s, proposal_list_s,
                                                     gt_bboxes_s, gt_labels_s,
-                                                    gt_bboxes_ignore_s, None,
+                                                    gt_bboxes_ignore_s, None, return_sample_res=True,
                                                     **kwargs)
+
+            # TODO cat gt box and positive proposal and map to origin size
+            cand_positive_bboxes = [sampling_res[i].pos_bboxes[sampling_res[i].pos_is_gt == 0] for i in labeled_img_ids]
+            cand_positive_labels = [sampling_res[i].pos_gt_labels[sampling_res[i].pos_is_gt == 0] for i in labeled_img_ids]
+            # cand_gt_bboxes = gt_bboxes_s[labeled_img_ids]
+            # cand_gt_labels = gt_labels_s[labeled_img_ids]
+            all_cand_bboxes = []
+            all_cand_labels = []
+            for i in range(len(labeled_img_ids)):
+                cur_gt_bboxes = gt_bboxes_s[labeled_img_ids[i]]
+                cur_gt_labels = gt_labels_s[labeled_img_ids[i]]
+                cur_proposals_bboxes = cand_positive_bboxes[i]
+                cur_proposals_labels = cand_positive_labels[i]
+                gap_num = self.shepherd_batch - cur_gt_bboxes.size(0)
+                if gap_num > 0 and cur_proposals_bboxes.size(0) > 0:
+                    # if cur_proposals_bboxes.size(0) > gap_num:
+                    gap_index = torch.randint(0, cur_proposals_bboxes.size(0), size=(gap_num,))
+                    cur_proposals_bboxes = cur_proposals_bboxes[gap_index]
+                    cur_proposals_labels = cur_proposals_labels[gap_index]
+                    all_cand_bboxes.append(torch.cat([cur_gt_bboxes, cur_proposals_bboxes], dim=0))
+                    all_cand_labels.append(torch.cat([cur_gt_labels, cur_proposals_labels]))
+                else:
+                    batch_index = torch.randint(0, cur_gt_bboxes.size(0), size=(self.shepherd_batch,))
+                    all_cand_bboxes.append(cur_gt_bboxes[batch_index])
+                    all_cand_labels.append(cur_gt_labels[batch_index])
+                # convert to origin size
+                all_cand_bboxes[i] = self.convert_to_origin_size(img_metas_s[labeled_img_ids[i]], all_cand_bboxes[i])
+            idxes = [img_metas_s[i]['idx'] for i in labeled_img_ids]
+            # shepherd_batch = self.get_shepherd_batch(idxes, all_cand_bboxes)
+            shepherd_batch = self.dataset.get_shepherd_batch(idxes, all_cand_bboxes)
+            shepherd_batch = shepherd_batch.to(img_s.device)
+            out = self.shepherd(shepherd_batch)
+            all_cand_labels = torch.cat(all_cand_labels)
+            shepherd_loss = F.cross_entropy(out, all_cand_labels)
+            shepherd_acc = (torch.argmax(out) == all_cand_labels) / all_cand_labels.size(0)
+            losses.update({'shepherd_lsso' : shepherd_loss, 'shepherd_acc' : shepherd_acc})
+            
+
             for key in roi_losses_s:
                 losses.update({key+'_s': roi_losses_s[key]})
         else:
@@ -811,3 +858,19 @@ class InstantTeachingTwoStageDetector(BaseDetector):
         proposal_list = self.rpn_head1.aug_test_rpn(x, img_metas)
         return self.roi_head1.aug_test(
             x, proposal_list, img_metas, rescale=rescale)
+
+    def convert_to_origin_size(self, img_metas, bboxes):
+        # scale_factor = [img_metas['pad_shape'][0] / img_metas['ori_shape'][0], img_metas['pad_shape'][1] / img_metas['ori_shape'][1],
+        # img_metas['pad_shape'][0] / img_metas['ori_shape'][0], img_metas['pad_shape'][1] / img_metas['ori_shape'][1]]
+        if img_metas['flip']:
+            _h, _w, _ = img_metas['img_shape']
+            assert bboxes.size(1) == 4
+            bboxes[:, [0, 2]] = _w - bboxes[:, [2, 0]]
+        bboxes = bboxes / bboxes.new_tensor(img_metas['scale_factor']).reshape(1, 4)
+        return bboxes
+
+    def set_dataset(self, dataset):
+        self.dataset = dataset
+
+    def get_shepherd_batch(self, idxs, bboxes):
+        return self.dataset.get_shepherd_batch(idxs, bboxes)

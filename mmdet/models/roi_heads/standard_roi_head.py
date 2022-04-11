@@ -74,7 +74,8 @@ class StandardRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
                       gt_bboxes,
                       gt_labels,
                       gt_bboxes_ignore=None,
-                      gt_masks=None):
+                      gt_masks=None,
+                      return_sample_res=False):
         """
         Args:
             x (list[Tensor]): list of multi-level img features.
@@ -128,7 +129,10 @@ class StandardRoIHead(BaseRoIHead, BBoxTestMixin, MaskTestMixin):
                                                     gt_masks, img_metas)
             losses.update(mask_results['loss_mask'])
 
-        return losses
+        if return_sample_res:
+            return losses, sampling_results
+        else:
+            return losses
 
     def _bbox_forward(self, x, rois):
         """Box head forward function used in both training and testing."""

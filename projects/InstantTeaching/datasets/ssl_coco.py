@@ -17,6 +17,10 @@ from torch.utils.data import Dataset
 
 from mmdet.datasets.builder import DATASETS
 from mmdet.datasets.pipelines import Compose
+import torchvision.transforms as transforms
+import PIL.Image as image
+
+from .loading import LoadImageFromFileV3
 
 
 @DATASETS.register_module()
@@ -117,6 +121,22 @@ class SSLCocoDataset(Dataset):
             self.pipeline_strong_aug_2_u = Compose(self.pipeline_u[2][:-1])
         assert self.pipeline_l[-1][-1]['type'] == self.pipeline_u[-1][-1]['type'] == 'CollectList'
         self.pipeline_collect = Compose(pipeline_l[-1][-1:])
+        self.load_img = LoadImageFromFileV3()
+        self.shepherd_pipeline = transforms.Compose([
+            transforms.RandomResizedCrop(224, scale=(0.2, 1.)),
+            transforms.RandomApply([
+                transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
+            ], p=0.8),
+            # transforms.RandomGrayscale(p=0.2),
+            # transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375])
+        ])
+        # self.shepherd_pipeline = [
+        #     mmcv.imrescale
+        # ]
+        # self.shepherd_pipeline = Compose(self.pipeline_l[3][:-1])
   
     def _set_group_flag(self, data_infos):
         """Set flag according to image aspect ratio.
@@ -156,7 +176,7 @@ class SSLCocoDataset(Dataset):
 
         return class_names
 
-    def pre_pipeline(self, results, is_labeled=True):
+    def pre_pipeline(self, results, is_labeled=True, idx=0):
         """Prepare results dict for pipeline"""
         if is_labeled:
             results['img_prefix'] = self.img_prefix_l
@@ -167,6 +187,7 @@ class SSLCocoDataset(Dataset):
         results['bbox_fields'] = []
         results['mask_fields'] = []
         results['seg_fields'] = []
+        results['idx'] = idx
     
     def _rand_another(self, flag, idx):
         """Get another random index from the same group as the given index"""
@@ -210,6 +231,37 @@ class SSLCocoDataset(Dataset):
                 idx = self._rand_another(idx)
                 continue
             return data
+    
+    def get_shepherd_batch(self, idxs, boxes):
+        # cut
+        cutted_object = []
+        for i in range(len(idxs)):
+            res = dict()
+            cur_img_info = self.data_infos_l[idxs[i]]
+            res['file_name'] = cur_img_info['file_name']
+            res['img_prefix'] = self.img_prefix_l
+            cur_img = self.load_img(res)
+            cur_box = boxes[i]
+            for box in cur_box:
+                # w, h = cur_img.shape[0], cur_img.shape[1]
+                # cur_object = cur_img[int(box[0]):int(box[2]), (h - int(box[3])):(h -int(box[1])), :]
+
+                # cur_object = cur_img[int(box[1]):int(box[3]), int(box[0]):int(box[2]), :]
+                # x = int(box[0])
+                cur_object = cur_img.crop((int(box[0]), int(box[1]), int(box[2]), int(box[3])))
+                # cur_object = cur_img[0:100, 0:100, :]
+                
+                # c = image.fromarray(cur_object)
+                # c.save('./projects/res_vis/' + res['file_name'])
+                # c = image.fromarray(cur_img)
+                # c.save('./projects/res_vis/ori' + res['file_name'])
+                # print()
+                cutted_object.append(cur_object)
+        for i in range(len(cutted_object)):
+            cutted_object[i] = self.shepherd_pipeline(cutted_object[i])
+            cutted_object[i] = torch.unsqueeze(cutted_object[i], 0)
+        shepherd_batch = torch.cat(cutted_object, dim=0)
+        return shepherd_batch
 
     def prepare_train_img(self, idx):
         """Get training data and annotations after pipeline.
@@ -230,10 +282,10 @@ class SSLCocoDataset(Dataset):
             if hasattr(self, 'pipeline_strong_aug_2_l'):
                 results_l_s_aug_2 = copy.deepcopy(results_l_w_aug)
             
-            self.pre_pipeline(results_l_w_aug, True)
-            self.pre_pipeline(results_l_s_aug, True)
+            self.pre_pipeline(results_l_w_aug, True, idx=idx)
+            self.pre_pipeline(results_l_s_aug, True, idx=idx)
             if hasattr(self, 'pipeline_strong_aug_2_l'):
-                self.pre_pipeline(results_l_s_aug_2, True)
+                self.pre_pipeline(results_l_s_aug_2, True, idx=idx)
 
             data_l_w = self.pipeline_weak_aug_l(results_l_w_aug)
             data_l_s = self.pipeline_strong_aug_l(results_l_s_aug)
@@ -252,10 +304,10 @@ class SSLCocoDataset(Dataset):
             if hasattr(self, 'pipeline_strong_aug_2_u'):
                 results_u_s_aug_2 = copy.deepcopy(results_u_w_aug)
             
-            self.pre_pipeline(results_u_w_aug, False)
-            self.pre_pipeline(results_u_s_aug, False)
+            self.pre_pipeline(results_u_w_aug, False, idx=idx)
+            self.pre_pipeline(results_u_s_aug, False, idx=idx)
             if hasattr(self, 'pipeline_strong_aug_2_u'):
-                self.pre_pipeline(results_u_s_aug_2, False)
+                self.pre_pipeline(results_u_s_aug_2, False, idx=idx)
 
             data_u_w = self.pipeline_weak_aug_u(results_u_w_aug)
             data_u_s = self.pipeline_strong_aug_u(results_u_s_aug)

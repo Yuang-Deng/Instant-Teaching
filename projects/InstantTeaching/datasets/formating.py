@@ -95,13 +95,14 @@ class CollectList(object):
                  keys,
                  meta_keys=('filename', 'ori_filename', 'ori_shape',
                             'img_shape', 'pad_shape', 'scale_factor', 'flip',
-                            'flip_direction', 'img_norm_cfg', 'is_unlabeled'),
+                            'flip_direction', 'img_norm_cfg', 'is_unlabeled', 'idx'),
                 meta_keys_additional=None,  # e.g., image_id, annotated_labels
         ):
         self.keys = keys
         self.meta_keys = meta_keys
         if meta_keys_additional is not None:
             self.meta_keys = tuple(list(self.meta_keys) + list(meta_keys_additional))
+        self.keys.append('ori_bboxes')
 
     def __call__(self, results_list):
         """Call function to collect keys in results. The keys in ``meta_keys``
