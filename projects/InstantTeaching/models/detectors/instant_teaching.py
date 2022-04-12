@@ -650,11 +650,11 @@ class InstantTeachingTwoStageDetector(BaseDetector):
                 cur_proposals_bboxes = cand_positive_bboxes[i]
                 cur_proposals_labels = cand_positive_labels[i]
                 gap_num = self.shepherd_batch - cur_gt_bboxes.size(0)
-                if gap_num > 0 and cur_proposals_bboxes.size(0) > 0:
-                    # if cur_proposals_bboxes.size(0) > gap_num:
-                    gap_index = torch.randint(0, cur_proposals_bboxes.size(0), size=(gap_num,))
-                    cur_proposals_bboxes = cur_proposals_bboxes[gap_index]
-                    cur_proposals_labels = cur_proposals_labels[gap_index]
+                if gap_num > 0:
+                    if cur_proposals_bboxes.size(0) > gap_num:
+                        gap_index = torch.randint(0, cur_proposals_bboxes.size(0), size=(gap_num,))
+                        cur_proposals_bboxes = cur_proposals_bboxes[gap_index]
+                        cur_proposals_labels = cur_proposals_labels[gap_index]
                     all_cand_bboxes.append(torch.cat([cur_gt_bboxes, cur_proposals_bboxes], dim=0))
                     all_cand_labels.append(torch.cat([cur_gt_labels, cur_proposals_labels]))
                 else:
@@ -664,13 +664,15 @@ class InstantTeachingTwoStageDetector(BaseDetector):
                 # convert to origin size
                 all_cand_bboxes[i] = self.convert_to_origin_size(img_metas_s[labeled_img_ids[i]], all_cand_bboxes[i])
             idxes = [img_metas_s[i]['idx'] for i in labeled_img_ids]
+            # all_cand_labels = torch.cat(all_cand_labels)
             # shepherd_batch = self.get_shepherd_batch(idxes, all_cand_bboxes)
-            shepherd_batch = self.dataset.get_shepherd_batch(idxes, all_cand_bboxes)
+            shepherd_batch = self.dataset.get_shepherd_batch(idxes, all_cand_bboxes, all_cand_labels)
             shepherd_batch = shepherd_batch.to(img_s.device)
             out = self.shepherd(shepherd_batch)
             all_cand_labels = torch.cat(all_cand_labels)
             shepherd_loss = F.cross_entropy(out, all_cand_labels)
-            shepherd_acc = (torch.argmax(out) == all_cand_labels) / all_cand_labels.size(0)
+            acc = torch.sum(torch.argmax(out) == all_cand_labels)
+            shepherd_acc = torch.sum(torch.argmax(out) == all_cand_labels) / all_cand_labels.size(0)
             losses.update({'shepherd_lsso' : shepherd_loss, 'shepherd_acc' : shepherd_acc})
             
 

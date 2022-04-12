@@ -132,7 +132,7 @@ class LoadImageFromFileV3(object):
         img = mmcv.imfrombytes(img_bytes, flag=self.color_type)
         if self.to_float32:
             img = img.astype(np.float32)
-        img = image.open(filename)
+        # img = image.open(filename)
 
         return img
 

@@ -21,6 +21,7 @@ import torchvision.transforms as transforms
 import PIL.Image as image
 
 from .loading import LoadImageFromFileV3
+from mmdet.datasets.pipelines.formating import ToTensor, to_tensor
 
 
 @DATASETS.register_module()
@@ -131,12 +132,12 @@ class SSLCocoDataset(Dataset):
             # transforms.RandomApply([moco.loader.GaussianBlur([.1, 2.])], p=0.5),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
-            transforms.Normalize(mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375])
+            # transforms.Normalize(mean = [0.471, 0.448, 0.408], std = [0.234, 0.239, 0.242])
         ])
         # self.shepherd_pipeline = [
         #     mmcv.imrescale
         # ]
-        # self.shepherd_pipeline = Compose(self.pipeline_l[3][:-1])
+        # self.shepherd_pipeline = Compose(self.pipeline_u[1][:-1])
   
     def _set_group_flag(self, data_infos):
         """Set flag according to image aspect ratio.
@@ -232,7 +233,7 @@ class SSLCocoDataset(Dataset):
                 continue
             return data
     
-    def get_shepherd_batch(self, idxs, boxes):
+    def get_shepherd_batch(self, idxs, boxes, labels):
         # cut
         cutted_object = []
         for i in range(len(idxs)):
@@ -242,24 +243,33 @@ class SSLCocoDataset(Dataset):
             res['img_prefix'] = self.img_prefix_l
             cur_img = self.load_img(res)
             cur_box = boxes[i]
-            for box in cur_box:
+            cur_label = labels[i]
+            for box, label in zip(cur_box, cur_label):
                 # w, h = cur_img.shape[0], cur_img.shape[1]
                 # cur_object = cur_img[int(box[0]):int(box[2]), (h - int(box[3])):(h -int(box[1])), :]
 
-                # cur_object = cur_img[int(box[1]):int(box[3]), int(box[0]):int(box[2]), :]
+                cur_object = cur_img[int(box[1]):int(box[3]), int(box[0]):int(box[2]), :]
                 # x = int(box[0])
-                cur_object = cur_img.crop((int(box[0]), int(box[1]), int(box[2]), int(box[3])))
+                # cur_object = cur_img.crop((int(box[0]), int(box[1]), int(box[2]), int(box[3])))
                 # cur_object = cur_img[0:100, 0:100, :]
                 
-                # c = image.fromarray(cur_object)
-                # c.save('./projects/res_vis/' + res['file_name'])
+                # cur_object = image.fromarray(cur_object)
+                # cur_object.save('./projects/res_vis/' + self.CLASSES[label] + res['file_name'])
                 # c = image.fromarray(cur_img)
                 # c.save('./projects/res_vis/ori' + res['file_name'])
                 # print()
                 cutted_object.append(cur_object)
+                # cutted_object.append(image.fromarray(cur_object))
         for i in range(len(cutted_object)):
-            cutted_object[i] = self.shepherd_pipeline(cutted_object[i])
-            cutted_object[i] = torch.unsqueeze(cutted_object[i], 0)
+            # cutted_object[i] = self.shepherd_pipeline(cutted_object[i])
+            cutted_object[i] = mmcv.imresize(cutted_object[i], (224, 224))
+            cutted_object[i] = mmcv.imflip(cutted_object[i])
+            # cur_object = image.fromarray(cutted_object[i])
+            # cur_object.save('./projects/res_vis/'+ res['file_name'])
+            # cutted_object[i] = mmcv.(cutted_object[i])
+            cutted_object[i] = mmcv.imnormalize(cutted_object[i], mean=np.array([123.675, 116.28, 103.53]), std=np.array([58.395, 57.12, 57.375]), to_rgb=True)
+            cutted_object[i] = np.ascontiguousarray(cutted_object[i].transpose(2, 0, 1))
+            cutted_object[i] = torch.unsqueeze(to_tensor(cutted_object[i]), 0)
         shepherd_batch = torch.cat(cutted_object, dim=0)
         return shepherd_batch
 

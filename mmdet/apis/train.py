@@ -86,7 +86,7 @@ def train_detector(model,
     shepherd_model = model.module.shepherd
     model.module.shepherd = None
     optimizer = build_optimizer(model, cfg.optimizer)
-    shepherd_optimizer = build_optimizer(shepherd_model, cfg.optimizer)
+    shepherd_optimizer = build_optimizer(shepherd_model, cfg.shepherd_optimizer)
     model.module.shepherd = shepherd_model
     runner = EpochBasedRunner(
         model,
