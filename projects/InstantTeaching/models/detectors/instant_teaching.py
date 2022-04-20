@@ -23,6 +23,7 @@ class InstantTeachingTwoStageDetector(BaseDetector):
                  train_cfg=None,
                  test_cfg=None,
                  pretrained=None,
+                 shepherd_pretrained=None,
                  shepherd=None,
                  ssl_warmup_iters=-1,
                  ssl_gt_box_low_thr=-1,                                
@@ -75,7 +76,7 @@ class InstantTeachingTwoStageDetector(BaseDetector):
 
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
-        self.init_weights(pretrained=pretrained)
+        self.init_weights(pretrained=pretrained, shepherd_pretrained=shepherd_pretrained)
     
     def train_step(self, data, optimizer):
         losses = self(**data)
@@ -102,9 +103,10 @@ class InstantTeachingTwoStageDetector(BaseDetector):
                  and self.roi_head.bbox_head is not None)
                 or (hasattr(self, 'bbox_head') and self.bbox_head is not None))
 
-    def init_weights(self, pretrained=None):
+    def init_weights(self, pretrained=None, shepherd_pretrained=None):
         super(InstantTeachingTwoStageDetector, self).init_weights(pretrained)
         self.backbone.init_weights(pretrained=pretrained)
+        self.shepherd.init_weights(pretrained=shepherd_pretrained)
         if self.with_neck:
             if isinstance(self.neck, nn.Sequential):
                 for m in self.neck:

@@ -165,6 +165,7 @@ model = dict(
     ssl_lambda_u=1.0,
 
     pretrained='torchvision://resnet50',
+    shepherd_pretrained='torchvision://resnet18',
     shepherd=dict(
         batch_size=32,
         backbone=dict(
